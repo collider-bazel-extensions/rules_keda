@@ -1,14 +1,13 @@
 """Tests for rules_keda.
 
 - Analysis test verifies the macro instantiates cleanly.
-- Smoke composition: kind cluster + KEDA + a tiny Deployment wrapped
-  in a ScaledObject with the `cron` trigger. Smoke applies the
-  Deployment with replicas=0, applies a ScaledObject whose cron
-  window starts immediately and runs for 5 minutes with
-  `desiredReplicas: 2`, then waits for the Deployment to scale up.
-  Proves: KEDA operator reconciler + metrics server + admission
-  webhook + HPA chain all work end-to-end. The cron trigger has no
-  external dependency — keeps the v0.1 smoke standalone.
+- Smoke composition: kind cluster + KEDA (split into two pieces — see
+  defs.bzl `keda_install` docstring for why) + a tiny Deployment
+  wrapped in a ScaledObject with the `cron` trigger. Smoke applies
+  the Deployment with replicas=0, applies a ScaledObject whose cron
+  window starts immediately, then waits for the Deployment to scale
+  up. Proves: KEDA operator reconciler + admission webhook + metrics
+  server + the underlying HPA chain all work end-to-end.
 """
 
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
@@ -33,6 +32,11 @@ itest_service(
     tags = ["manual"],
 )
 
+# `keda_install` emits two install binaries (see defs.bzl for why):
+#   - :keda_install_bin_kubesys         — kube-system RoleBinding apply
+#   - :keda_install_bin_kubesys_health  — paired health_check (no-op)
+#   - :keda_install_bin                 — main KEDA manifest apply
+# Plus `keda_health_check` emits :keda_health_bin for the main piece.
 keda_install(
     name = "keda_install_bin",
     tags = ["manual"],
@@ -41,6 +45,20 @@ keda_install(
 keda_health_check(
     name = "keda_health_bin",
     tags = ["manual"],
+)
+
+# Wrappers source kind's env file then exec the rules_kubectl-emitted
+# install/health binaries.
+sh_binary(
+    name = "kubesys_install_wrapper",
+    srcs = ["kubesys_install_wrapper.sh"],
+    data = [":keda_install_bin_kubesys"],
+)
+
+sh_binary(
+    name = "kubesys_health_wrapper",
+    srcs = ["kubesys_health_wrapper.sh"],
+    data = [":keda_install_bin_kubesys_health"],
 )
 
 sh_binary(
@@ -55,10 +73,21 @@ sh_binary(
     data = [":keda_health_bin"],
 )
 
+# Two itest_services chained: kubesys must be applied before the main
+# KEDA install, because the metrics-apiserver Deployment in the main
+# install crash-loops without the kube-system RoleBinding.
+itest_service(
+    name = "keda_kubesys_svc",
+    exe = ":kubesys_install_wrapper",
+    deps = [":kind_svc"],
+    health_check = ":kubesys_health_wrapper",
+    tags = ["manual"],
+)
+
 itest_service(
     name = "keda_svc",
     exe = ":keda_install_wrapper",
-    deps = [":kind_svc"],
+    deps = [":keda_kubesys_svc"],
     health_check = ":keda_health_wrapper",
     tags = ["manual"],
 )

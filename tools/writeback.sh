@@ -16,46 +16,61 @@ RENDERED="${RUNFILES_DIR}/_main/${SRC_BAZEL_BIN}"
 [[ -f "$RENDERED" ]] || { echo "writeback: missing rendered YAML at $RENDERED" >&2; exit 1; }
 
 DEST="${WORKSPACE}/${DEST_REL}"
+DEST_KUBESYS="${DEST%.yaml}-kubesys.yaml"
 mkdir -p "$(dirname "$DEST")"
 
-# Surgically strip the `keda-operator-auth-reader` RoleBinding. It's a
-# RoleBinding hard-coded to `metadata.namespace: kube-system` (chart's
-# `rbac.controlPlaneServiceAccountsNamespace` value, used so KEDA's
-# metrics-apiserver can read the `extension-apiserver-authentication`
-# ConfigMap that lives in kube-system — needed for aggregated-API-server
-# auth between kube-apiserver and the metrics-apiserver, which only
-# external-metrics scalers actually use). A multi-namespace manifest
-# can't be applied through rules_kubectl's `-n <ns>` apply path —
-# kubectl rejects with "the namespace from the provided object
-# 'kube-system' does not match the namespace 'keda'." v0.1's cron-
-# trigger smoke doesn't use external metrics (cron is operator-evaluated,
-# no metrics-apiserver involvement), so dropping this RoleBinding
-# loses functionality the smoke wouldn't have exercised anyway. v0.2
-# adding external-metrics scalers will need to either split the
-# manifest into per-namespace pieces or open a PR against rules_kubectl
-# to allow applying multi-namespace YAML without -n.
-python3 - "$RENDERED" "$DEST" <<'PY'
+# Split the rendered manifest into two pieces by metadata.namespace:
+#   - keda.yaml         — everything except the auth-reader RoleBinding
+#                         (cluster-scoped resources + everything in
+#                         the keda namespace)
+#   - keda-kubesys.yaml — only the `keda-operator-auth-reader`
+#                         RoleBinding, which is hard-coded to
+#                         `namespace: kube-system` (chart's
+#                         `rbac.controlPlaneServiceAccountsNamespace`,
+#                         needed so KEDA's metrics-apiserver can read
+#                         `extension-apiserver-authentication` from
+#                         kube-system — used for aggregated-API-server
+#                         auth between kube-apiserver and the
+#                         metrics-apiserver).
+#
+# Why split: rules_kubectl's `kubectl_apply` passes a single `-n <ns>`
+# flag and kubectl rejects multi-namespace YAML ("the namespace from
+# the provided object 'kube-system' does not match the namespace
+# 'keda'"). Applying as two separate `kubectl_apply` targets
+# (one with `-n keda`, one with `-n kube-system`) sidesteps this.
+# The metrics-apiserver Deployment crash-loops without the
+# RoleBinding, so we can't just strip it — even cron-trigger smokes
+# (which don't use external metrics) wait on the metrics-apiserver
+# becoming Available.
+python3 - "$RENDERED" "$DEST" "$DEST_KUBESYS" <<'PY'
 import sys
-src, dst = sys.argv[1], sys.argv[2]
+src, dst_main, dst_kubesys = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(src) as f:
     text = f.read()
 
 docs = text.split("\n---\n")
-kept = []
+main_docs = []
+kubesys_docs = []
 for d in docs:
-    # Match on resource name AND namespace AND kind so we don't
-    # accidentally strip a future resource that shares one of them.
+    # The auth-reader RoleBinding goes to kube-system; everything else
+    # (cluster-scoped + keda-namespaced) goes to the main manifest.
     if ("name: keda-operator-auth-reader" in d
             and "namespace: kube-system" in d
             and "kind: RoleBinding" in d):
-        continue
-    kept.append(d)
-with open(dst, "w") as f:
-    f.write("\n---\n".join(kept))
+        kubesys_docs.append(d)
+    else:
+        main_docs.append(d)
+
+with open(dst_main, "w") as f:
+    f.write("\n---\n".join(main_docs))
+with open(dst_kubesys, "w") as f:
+    f.write("\n---\n".join(kubesys_docs))
 PY
 
-SHA256=$(sha256sum "$DEST" | awk '{print $1}')
-LINES=$(wc -l < "$DEST")
-echo "writeback: wrote $DEST"
-echo "  sha256: $SHA256"
-echo "  lines:  $LINES"
+for f in "$DEST" "$DEST_KUBESYS"; do
+  SHA256=$(sha256sum "$f" | awk '{print $1}')
+  LINES=$(wc -l < "$f")
+  echo "writeback: wrote $f"
+  echo "  sha256: $SHA256"
+  echo "  lines:  $LINES"
+done
