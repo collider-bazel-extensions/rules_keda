@@ -1,0 +1,57 @@
+# Kafka consumer-group-lag scaling — KEDA's marquee use case. Scale
+# a consumer Deployment based on how far behind the latest message
+# its consumer group is.
+#
+# Sketch — not exercised by v0.1's smoke. Needs:
+#   - A real Kafka cluster (e.g. via rules_kafka).
+#   - The consumer Deployment must be configured with the same
+#     `consumerGroup` as the trigger. KEDA queries the Kafka admin
+#     API to read the committed-offset vs end-offset for that group
+#     on the configured topic.
+#   - For SASL/TLS Kafka, supply credentials via TriggerAuthentication.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-consumer
+  namespace: app
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: order-consumer}
+  template:
+    metadata:
+      labels: {app: order-consumer}
+    spec:
+      containers:
+        - name: consumer
+          image: my-consumer:latest
+          env:
+            - {name: KAFKA_BROKERS,        value: "kafka.kafka.svc.cluster.local:9092"}
+            - {name: KAFKA_TOPIC,          value: "orders"}
+            - {name: KAFKA_CONSUMER_GROUP, value: "order-processor"}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: order-consumer-lag
+  namespace: app
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: order-consumer
+  pollingInterval: 30
+  cooldownPeriod: 60
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.kafka.svc.cluster.local:9092
+        consumerGroup: order-processor
+        topic: orders
+        # One replica per `lagThreshold` messages of lag.
+        lagThreshold: "100"
+        # PLAINTEXT for the smoke; production: SASL_SSL/SASL_PLAINTEXT
+        # + tls/sasl.* metadata + a TriggerAuthentication ref.
+        offsetResetPolicy: latest

@@ -1,0 +1,44 @@
+# `ScaledJob` — KEDA scales Jobs (per-event Job creation), not
+# Deployments. Useful for "process exactly one message and exit"
+# workloads where each event spawns a one-shot Job.
+#
+# Difference from ScaledObject:
+#   - ScaledObject mutates the target Deployment's `replicas` count
+#     based on metric value. Scaling down means killing pods.
+#   - ScaledJob creates one new Job per event. Scaling down means
+#     letting in-progress Jobs complete (no premature kills). Common
+#     for batch / "guarantee delivery" workloads.
+#
+# Sketch — not exercised by v0.1's smoke. Same Kafka-fixture caveats
+# as `kafka_lag.yaml`.
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: image-resize-jobs
+  namespace: app
+spec:
+  jobTargetRef:
+    parallelism: 1
+    completions: 1
+    backoffLimit: 3
+    template:
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: resize
+            image: my-resizer:latest
+            env:
+              - {name: KAFKA_BROKERS, value: "kafka.kafka.svc.cluster.local:9092"}
+              - {name: KAFKA_TOPIC,   value: "image-uploads"}
+  pollingInterval: 30
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  maxReplicaCount: 50
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.kafka.svc.cluster.local:9092
+        consumerGroup: resizer
+        topic: image-uploads
+        lagThreshold: "1"   # one Job per pending message

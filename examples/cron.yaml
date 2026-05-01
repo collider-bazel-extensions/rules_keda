@@ -1,0 +1,49 @@
+# Cron-driven scaling — scale a Deployment to N replicas during a
+# specified time window every day. The simplest KEDA scaler; no
+# external dependency.
+#
+# Cron expressions use 5-field cron format (m h dom mon dow). The
+# trigger is "in window" when the next end-fire is sooner than the
+# next start-fire (i.e., start fired more recently than end).
+# Outside the window, KEDA scales the workload back to
+# `minReplicaCount`.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: business-hours-app
+  namespace: app
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: business-hours-app}
+  template:
+    metadata:
+      labels: {app: business-hours-app}
+    spec:
+      containers:
+        - name: app
+          image: my-app:latest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: business-hours-cron
+  namespace: app
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: business-hours-app
+  pollingInterval: 30
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  triggers:
+    - type: cron
+      metadata:
+        timezone: America/Los_Angeles
+        # Scale up at 8am on weekdays.
+        start: "0 8 * * 1-5"
+        # Scale down at 6pm on weekdays.
+        end:   "0 18 * * 1-5"
+        desiredReplicas: "10"

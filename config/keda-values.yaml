@@ -1,0 +1,45 @@
+# Render-time values for rules_keda's pinned manifest.
+#
+# Smoke-fixture footprint: KEDA's three Deployments (operator, metrics
+# server, admission webhooks) at default replicas, all CRDs included.
+# The chart's defaults are already a sensible smoke fixture — no
+# storage to disable, no telemetry, no auth fixtures. We just turn
+# off the optional bits that aren't relevant for a single-cluster
+# smoke (PodDisruptionBudget, ServiceMonitor, NetworkPolicy).
+#
+# Production deployments override resource requests / limits +
+# replicas + cert-manager integration for the webhook serving cert.
+
+# PDBs require multi-replica Deployments to be useful; smoke runs
+# everything at replicas=1. Off avoids a stray PDB resource.
+podDisruptionBudget:
+  operator:
+    enabled: false
+  metricsApiServer:
+    enabled: false
+  webhooks:
+    enabled: false
+
+# ServiceMonitor requires the Prometheus Operator's CRD; smoke doesn't
+# install it. Off.
+prometheus:
+  metricServer:
+    enabled: false
+  operator:
+    enabled: false
+  webhooks:
+    enabled: false
+
+# NetworkPolicy off — KEDA's egress requirements depend on which scalers
+# are in play; the smoke uses the cron scaler which has no egress, but
+# downstream consumers using Kafka/Redis/etc. would need to allowlist
+# those endpoints. Default-allow keeps the smoke simple.
+networkPolicy:
+  enabled: false
+
+# Webhooks. KEDA's admission webhook validates ScaledObject + ScaledJob
+# CRs (e.g., catches conflicting trigger configs). Default chart wires
+# it up with a chart-managed cert. Smoke leaves it on — turning it off
+# means the smoke could apply syntactically-invalid CRs without seeing
+# the operator's reaction, and we want a faithful production-shaped
+# install path.

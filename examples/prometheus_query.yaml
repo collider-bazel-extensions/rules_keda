@@ -1,0 +1,52 @@
+# Scale based on a Prometheus query result. Useful when no built-in
+# scaler matches (e.g., scaling on application-level metrics: HTTP
+# request rate, queue depth via histograms, error-rate ratios, etc.).
+#
+# Sketch — not exercised by v0.1's smoke. Needs a Prometheus-compatible
+# API (Prometheus, Mimir via rules_mimir, Thanos, VictoriaMetrics, etc.).
+# KEDA polls the configured `query` and uses its scalar result as the
+# external metric value; HPA then computes desired replicas as
+# `ceil(metricValue / threshold)`.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  namespace: app
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: api-server}
+  template:
+    metadata:
+      labels: {app: api-server}
+    spec:
+      containers:
+        - name: api
+          image: my-api:latest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: api-server-rps
+  namespace: app
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: api-server
+  pollingInterval: 30
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 50
+  triggers:
+    - type: prometheus
+      metadata:
+        # Mimir gateway URL when composing with rules_mimir.
+        serverAddress: http://mimir-gateway.mimir.svc.cluster.local/prometheus
+        metricName: api_requests_per_second
+        # Aggregate request rate across all api-server pods over the
+        # last minute.
+        query: |
+          sum(rate(http_requests_total{job="api-server"}[1m]))
+        # One replica per 100 RPS.
+        threshold: "100"
