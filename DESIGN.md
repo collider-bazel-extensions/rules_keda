@@ -107,6 +107,10 @@ would exercise the cert-manager path.
 | Smoke (kind + KEDA + ScaledObject with cron trigger + scale-up assertion) | done |
 | `examples/` (cron, Kafka-lag sketch, Prometheus-query sketch) | done |
 
+## Release archive contents (v0.1.1)
+
+`tests/` and `tools/` are `export-ignore` (`.gitattributes`): their packages load dev-only modules (rules_itest, rules_kind, rules_shell, rules_helm), which made `@rules_keda//...` unloadable for consumers. `REPO.bazel` `ignore_directories` would also hide them from this repo's own `bazel test`, so it isn't used. A `git_override` clone still contains them. CI's `consumer` job (`.github/consumer/check.sh`) checks the commit's `git archive`: the directories are absent and `@rules_keda//...` loads for a consumer.
+
 ## Deferred (not v0.1.0)
 
 - **Kafka-lag composed smoke** (`rules_kafka` + `rules_keda`) — the
