@@ -209,3 +209,11 @@ PRs welcome. Conventions match the sibling rule sets:
   use `certManager.use: true`)
 - HPA fallback config — what KEDA does when the trigger source is
   unreachable
+
+---
+
+## Requesting a new rules package
+
+Want Bazel rules for another tool or service?
+[Request a rules package](https://github.com/collider-bazel-extensions/.github/issues/new?template=request-a-rules-package.yml).
+The [organization page](https://github.com/collider-bazel-extensions) lists every package.
